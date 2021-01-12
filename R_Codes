@@ -1,0 +1,288 @@
+library(ggplot2)
+library(class)
+library(tree)
+library(randomForest)
+library(gbm)
+
+getwd()
+Data <- read.csv("data.csv")
+BCData<- Data[, 1:32]
+attach(BCData)
+head(BCData)
+
+#Check if there is any missing values
+MissingValues = sum(is.na(BCData))
+MissingValues
+#The data looks clean since there are no missing values. 
+
+dim(BCData)
+colnames(BCData)
+#Five number summary
+summary(BCData[3:32])
+#We can see the five number summary of the quantitative variables from the dataset.
+
+#Correlation matrix
+cor(BCData[3:32])
+
+#This is a classification problem, where we classify if a cancer is benign or malignant.
+#I am going to apply different classification algorithms and see how well we can predict.
+
+BCData$diagnosis = as.factor(BCData$diagnosis)
+
+# Logisitic Regression using random four predictors among 30 predictors:
+
+LogReg1 = glm(diagnosis~radius_mean+texture_se+perimeter_worst+area_mean, family = binomial, data = BCData )
+summary(LogReg1)
+#From the summary, we can see that the p-value of area_mean is greater than the significance
+#level, so area_mean is not statistically significant in predicting the diagnosis.
+
+Pred1 = predict(LogReg1, type = "response")
+Prediction = ifelse(Pred1 > 0.5, 'M', 'B')
+
+table(Prediction, diagnosis) 
+mean(Prediction!= diagnosis)
+
+LRPlot<- data.frame("Category" = c('Corrrect Prediction', 'Misclassified'),"Prediction_Amount" = c(95,5))
+ggplot(LRPlot, aes(x="", y = Prediction_Amount, fill = Category))+geom_bar(stat = "identity", width = 1)+ labs( title = "Logisitic Regression Classification")+coord_polar("y", start = 0)
+
+#Using all predictors
+
+LogRegA = glm(diagnosis~.-id, family = binomial, data = BCData )
+summary(LogRegA)
+#From the summary, we can see that the p-value of area_mean is greater than the significance
+#level, so area_mean is not statistically significant in predicting the diagnosis.
+
+PredA = predict(LogRegA, type = "response")
+PredictionA = ifelse(PredA > 0.5, 'M', 'B')
+
+table(PredictionA, diagnosis)
+
+mean(PredictionA!= diagnosis)
+
+# Using Knn algorithm
+Error1 = 0
+BCData1<- BCData[1:568, ]
+set.seed(2)
+train = sample(1:nrow(BCData1), nrow(BCData1)/2)
+length(train)
+train.X = cbind(BCData1$radius_mean, BCData1$texture_se, BCData1$perimeter_worst, BCData1$area_mean)[train,]
+test.X = cbind(BCData1$radius_mean, BCData1$texture_se, BCData1$perimeter_worst, BCData1$area_mean)[-train, ]
+train.diagnosis = BCData1$diagnosis[train]
+
+for (i in 1:25) {
+  knnPrediction = knn(train.X, test.X, train.diagnosis, i)
+  table(knnPrediction, BCData1$diagnosis[-train])
+  Error = mean(knnPrediction!= BCData1$diagnosis[-train])
+  cat("Error[",i,"]: ", Error,"\n")
+}
+
+KNNPlot<- data.frame("Category" = c('Corrrect Prediction', 'Misclassified'),"Prediction_Amount" = c(92,8))
+ggplot(KNNPlot, aes(x="", y = Prediction_Amount, fill = Category))+geom_bar(stat = "identity", width = 1)+ labs( title = "KNN Classification (K = 7)")+coord_polar("y", start = 0)
+
+
+#Performing Decision Tree on the dataset using all the predictors
+
+dim(BCData1)
+treeTest = BCData1[-train,]
+#dim(treeTest)
+BCTree = tree(diagnosis~.-id,BCData1, subset = train) #Using training data
+summary(BCTree)
+plot(BCTree, col = "blue")
+text(BCTree, pretty = 0, col = "red")
+BCTreePred = predict(BCTree, treeTest, type = "class")
+table(BCTreePred, BCData1$diagnosis[-train])
+mean(BCTreePred!= BCData1$diagnosis[-train])
+
+# Next lets prune the tree and run the process again.
+
+set.seed(3)
+CVBCTree = cv.tree(BCTree, FUN = prune.misclass)
+names(CVBCTree)
+ggplot()+ aes(x =CVBCTree$k, y=CVBCTree$dev)+ geom_point(col="red")+geom_line()
+
+ggplot() + aes(x =CVBCTree$size, y=CVBCTree$dev)+ 
+    geom_point(col="red")+geom_line(col = "blue")+ labs(x= "Tree Size", y= "Cross validation Error")+
+      ggtitle(label = 'Tree Size vs Cross Validation Error')
+
+
+#plot(CVBCTree$k, CVBCTree$dev, type = "b")
+#(CVBCTree$size, CVBCTree$dev, type = "b")
+
+#Looking at the graph, we got the lowest dev when size = 
+# Now we prune the tree
+
+PrunedTree = prune.misclass(BCTree, best = 7)
+plot(PrunedTree, col = "red")
+text(PrunedTree, pretty = 0, col = "blue")
+
+PrunedTreePred = predict(PrunedTree, treeTest, type = "class")
+table(PrunedTreePred, BCData1$diagnosis[-train])
+mean(PrunedTreePred!= BCData1$diagnosis[-train])
+
+
+#Next I am going to perform the random Forest algorithm in my dataset.
+
+#First, we perform bagging.
+trainingData = BCData[train, ]
+testingData = BCData[-train, ]
+
+BaggingModel = randomForest(diagnosis~.-id, trainingData, mtry = 30, importance = TRUE)
+BagPrediction = predict(BaggingModel, testingData)
+length(BagPrediction)
+plot(BagPrediction, col = "green")
+table(BagPrediction, testingData$diagnosis)
+mean(BagPrediction!= testingData$diagnosis)
+
+#Now, we perform boosting
+#This is a classification problem and it uses m = sqrt(p) predictors.
+
+set.seed(1)
+outcome<- ifelse(diagnosis == "B", 0, 1)
+#outcome<-as.factor(outcome)
+BData <- data.frame(BCData, outcome)
+dim(BData)
+BoostData <- BData[1:568, 3:33]
+trainboost<- sample(1:nrow(BoostData), nrow(BoostData)/2)
+trainingBoostingData<- BoostData[trainboost, ]
+testingBoostingData<- BoostData[-trainboost, ]
+
+BoostModel = gbm(outcome~., data = trainingBoostingData, distribution = "bernoulli", n.trees = 3000, interaction.depth = 4)
+summary(BoostModel)
+
+#From the summary we can see that the concave.points_mean, concave.points_worst, radius_worst, perimeter_worst,
+#area_worst are the most importance variables because they have highest value of relative influence.
+
+#Predicting outcome using the boosting model
+
+BoostPred = predict(BoostModel, testingBoostingData, n.trees = 3000)
+BoostPrediction = ifelse(BoostPred>0.5, 1, 0)
+table(BoostPrediction, testingBoostingData$outcome)
+mean(BoostPrediction!= testingBoostingData$outcome)
+
+#We ge the error rate of 0.06 when using boosting.
+
+#Since there are a lot of variables involved in the datasets, I will use the PCA
+#to reduce the dimension before applying classification algorithms.
+
+PCABCData = prcomp(BCData[3:32], scale = TRUE)
+biplot(PCABCData, scale = 0)
+summary(PCABCData)
+
+#PCABCData$rotation
+#From summary, we can see that after PC12, the cumulative proportion of variance explained is
+#incresed slowly.
+Var = (PCABCData$sdev)^2
+#PVE = Proportion of Variance explained
+PVE = Var/sum(Var)
+ggplot()+aes(x=1:30, y=PVE)+
+  geom_point(col = 'red')+
+  labs(x='Principal Component', y='Proportion of Variance Explained')+
+  ggtitle(label = 'Proportion of Variance Explained vs Principal Component')
+
+ggplot()+aes(x=1:30, y=cumsum(PVE))+
+  geom_point(col = 'red')+
+  labs(x='Principal Component', y='Cumulative Proportion of Variance Explained')+
+  ggtitle(label = 'Cumulative Proportion of Variance Explained vs Principal Component')
+
+#plot(PVE, xlab="Principal Component", ylab="Proportion of Variance Explained", ylim=c(0,1),type='b')
+
+#plot(cumsum(PVE), xlab="Principal Component", ylab="Cumulative Proportion of Variance Explained", ylim=c(0,1),type='b')
+
+#From this plot, we can see that after Principal Component 10, the plot is preety much horizontal.
+#It means we can the use first 10 or 12 PCA to predict the result.
+#PCABCData$x
+Data2 <- data.frame(PCABCData$x[,1:12])
+diagnosis<-as.factor(diagnosis)
+Data3 <- data.frame(Data2, diagnosis) #Added diagnosis to the data set
+dim(Data3)
+LogReg2 = glm(diagnosis~PC1+PC2+PC3+PC4, family = binomial, data = Data2 )
+summary(LogReg2)
+
+Pred2 = predict(LogReg2, type = "response")
+Prediction2 = ifelse(Pred2 > 0.5, 'M', 'B')
+
+table(Prediction2, diagnosis) 
+mean(Prediction2!= diagnosis)
+
+# Using PCA data for the Knn algorithm
+Error2 = 0
+
+# Making Data 4 which has one less observation than the original dataset to make equal number of training and testind set
+
+Data4<- Data3[1:568, ]
+set.seed(1)
+train2 = sample(1:nrow(Data4), nrow(Data4)/2)
+#length(train2)
+train.X2 = cbind(Data4$PC1,Data4$PC2, Data4$PC3, Data4$PC4 )[train,]
+test.X2 = cbind(Data4$PC1,Data4$PC2, Data4$PC3, Data4$PC4)[-train, ]
+train.diagnosis2 = Data4$diagnosis[train]
+
+for (i in 1:25) {
+  knnPrediction2 = knn(train.X2, test.X2, train.diagnosis2, i)
+  table(knnPrediction2, Data4$diagnosis[-train])
+  Error2 = mean(knnPrediction2!= BCData1$diagnosis[-train])
+  cat("Error2[",i,"]: ", Error2,"\n")
+}
+
+#Lets perform K means clustering to see if we can classify the results into two groups.
+
+KMCDataPCA<- Data2
+KMC2 <- kmeans(KMCDataPCA, 2, nstart = 25)
+KMC2$cluster
+print(table(KMC2$cluster == 1))
+Result<- sort(KMC2$cluster)
+OriginalLabel<- c(rep(1, 357), c(rep(2, 212)))
+table(Result, OriginalLabel)
+mean(Result!= OriginalLabel)
+
+
+#Graphing Section
+library(gridExtra)
+
+LRPlot<- data.frame("Category" = c('Corrrect Prediction', 'Misclassified'),"Prediction_Amount" = c(95,5))
+LRP<- ggplot(LRPlot, aes(x="", y = Prediction_Amount, fill = Category))+geom_bar(stat = "identity", width = 1)+
+  labs( title = "Logisitic Regression Classification Before PCA")+coord_polar("y", start = 0)+
+  geom_text(aes(label = paste0(Prediction_Amount, "%")),position = position_stack(vjust=0.5)) +labs(x = NULL, y = NULL, fill = NULL)
+
+LRPlotPCA<- data.frame("Category" = c('Corrrect Prediction', 'Misclassified'),"Prediction_Amount" = c(97.2,2.8))
+LRPCA<-ggplot(LRPlotPCA, aes(x="", y = Prediction_Amount, fill = Category))+geom_bar(stat = "identity", width = 1)+ 
+  labs( title = "Logisitic Regression Classification After PCA")+coord_polar("y", start = 0)+
+  geom_text(aes(label = paste0(Prediction_Amount, "%")),position = position_stack(vjust=0.5)) +labs(x = NULL, y = NULL, fill = NULL)
+
+grid.arrange(LRP, LRPCA, ncol = 2)
+
+KNNPlot<- data.frame("Category" = c('Corrrect Prediction', 'Misclassified'),"Prediction_Amount" = c(92.06,7.94))
+KNNP<- ggplot(KNNPlot, aes(x="", y = Prediction_Amount, fill = Category))+geom_bar(stat = "identity", width = 1)+
+  labs( title = "KNN Classification(K=7) Before PCA")+coord_polar("y", start = 0)+
+  geom_text(aes(label = paste0(Prediction_Amount, "%")), position = position_stack(vjust=0.5)) +labs(x = NULL, y = NULL, fill = NULL)
+
+KNNPlotPCA<- data.frame("Category" = c('Corrrect Prediction', 'Misclassified'),"Prediction_Amount" = c(96.5,3.5))
+KNNPCA<-ggplot(KNNPlotPCA, aes(x="", y = Prediction_Amount, fill = Category))+geom_bar(stat = "identity", width = 1)+ 
+  labs( title = "KNN Classification(K=10) After PCA")+coord_polar("y", start = 0)+
+  geom_text(aes(label = paste0(Prediction_Amount, "%")), position = position_stack(vjust=0.5)) +labs(x = NULL, y = NULL, fill = NULL)
+
+grid.arrange(KNNP, KNNPCA, ncol = 2)
+
+Unpruned<- data.frame("Category" = c('Corrrect Prediction', 'Misclassified'),"Prediction_Amount" = c(95.1,4.9))
+UP<- ggplot(Unpruned, aes(x="", y = Prediction_Amount, fill = Category))+geom_bar(stat = "identity", width = 1)+ 
+  labs( title = "Decision Tree (Unpruned)")+coord_polar("y", start = 0)+
+  geom_text(aes(label = paste0(Prediction_Amount, "%")), position = position_stack(vjust=0.5)) +labs(x = NULL, y = NULL, fill = NULL)
+
+Pruned<- data.frame("Category" = c('Corrrect Prediction', 'Misclassified'),"Prediction_Amount" = c(95.1,4.9))
+PD<- ggplot(Pruned, aes(x="", y = Prediction_Amount, fill = Category))+geom_bar(stat = "identity", width = 1)+
+  labs( title = "Decision Tree (Pruned)")+coord_polar("y", start = 0)+
+  geom_text(aes(label = paste0(Prediction_Amount, "%")), position = position_stack(vjust=0.5)) +labs(x = NULL, y = NULL, fill = NULL)
+
+grid.arrange(UP, PD, ncol = 2)
+
+Bag<- data.frame("Category" = c('Corrrect Prediction', 'Misclassified'),"Prediction_Amount" = c(95.8,4.2))
+BagP<- ggplot(Bag, aes(x="", y = Prediction_Amount, fill = Category))+geom_bar(stat = "identity", width = 1)+
+  labs( title = "Bagging")+coord_polar("y", start = 0)+
+  geom_text(aes(label = paste0(Prediction_Amount, "%")), position = position_stack(vjust=0.5)) +labs(x = NULL, y = NULL, fill = NULL)
+
+Boost<- data.frame("Category" = c('Corrrect Prediction', 'Misclassified'),"Prediction_Amount" = c(93.3,6.7))
+BoostP<- ggplot(Boost, aes(x="", y = Prediction_Amount, fill = Category))+geom_bar(stat = "identity", width = 1)+
+  labs( title = "Boosting")+coord_polar("y", start = 0)+
+  geom_text(aes(label = paste0(Prediction_Amount, "%")), position = position_stack(vjust=0.5)) +labs(x = NULL, y = NULL, fill = NULL)
+
+grid.arrange(BagP,BoostP , ncol = 2)
